@@ -220,6 +220,9 @@
     lose:   ()=>beep(120,0.30,'triangle',0.12),
     over:   ()=>beep(90,0.5,'sawtooth',0.14),
     start:  ()=>beep(520,0.12,'square',0.10),
+    target: ()=>beep(880,0.06,'square',0.09),
+    rollover: ()=>beep(990,0.08,'triangle',0.09),
+    jackpot: ()=>{ beep(660,0.1,'square',0.11); setTimeout(()=>beep(880,0.1,'square',0.11),90); setTimeout(()=>beep(1320,0.18,'square',0.12),180); },
   };
 
   // ---------- BGM: 3-voice loop (melody + bass + noise drum) ----------
@@ -320,11 +323,13 @@
   const GRAVITY = 900;      // px/s^2
   const DRAIN_Y = 618;
   const BALL_R = 8;
+  const LANE_X = 320;       // center of the plunger lane
+  const LANE_REST_Y = 594;  // resting on the lane floor
 
-  const ball = { x:300, y:598, vx:0, vy:0, moving:false };
+  const ball = { x:LANE_X, y:LANE_REST_Y, vx:0, vy:0, moving:false };
 
   function resetBallToLaunch(){
-    ball.x = 300; ball.y = 598; ball.vx = 0; ball.vy = 0; ball.moving = false;
+    ball.x = LANE_X; ball.y = LANE_REST_Y; ball.vx = 0; ball.vy = 0; ball.moving = false;
   }
 
   // ---------- Table geometry ----------
@@ -332,29 +337,52 @@
   const A = {x:20,  y:160};
   const B = {x:55,  y:55};
   const C = {x:305, y:55};
-  const D = {x:340, y:160};
-  const E = {x:340, y:430};
+  const D = {x:340, y:160};      // top of the right wall (also top of plunger lane, outer side)
+  const DGAP = {x:300, y:180};   // top of the field's inner boundary (gap between D and DGAP = lane exit into field)
+  const RMID = {x:300, y:430};   // field right side, straight down from the gap
   const F = {x:255, y:560};
   const G = {x:105, y:560};
   const H = {x:20,  y:430};
+  const LANE_OUTER_BOT = {x:340, y:604};
+  const LANE_INNER_BOT = {x:300, y:604};
 
   const walls = [
-    [A,B],[B,C],[C,D],[D,E],[E,F], // right side + top
-    [G,H],[H,A]                    // left side
+    [A,B],[B,C],[C,D],           // top arch
+    [DGAP,RMID],[RMID,F],        // field right side + funnel (DGAP..D is the open lane exit — no wall)
+    [G,H],[H,A],                 // left side
+    // plunger lane (right edge channel the ball launches up through)
+    [D,LANE_OUTER_BOT],          // lane outer wall
+    [DGAP,LANE_INNER_BOT],       // lane inner wall
+    [LANE_INNER_BOT,LANE_OUTER_BOT] // lane floor (holds the ball before launch)
     // F-G intentionally open: the drain gap between the flippers
   ];
 
-  // Pop bumpers
+  // Pop bumpers (5, arranged as a flower cluster for more chaotic/fun bounces)
   const bumpers = [
-    {x:130, y:225, r:18, color:'#f8b800', points:100, flash:0},
-    {x:230, y:225, r:18, color:'#e83800', points:100, flash:0},
-    {x:180, y:160, r:20, color:'#00e8d8', points:150, flash:0},
+    {x:160, y:140, r:20, color:'#00e8d8', points:150, flash:0},
+    {x:105, y:205, r:16, color:'#f8b800', points:100, flash:0},
+    {x:215, y:205, r:16, color:'#e83800', points:100, flash:0},
+    {x:130, y:280, r:14, color:'#f87858', points:100, flash:0},
+    {x:190, y:280, r:14, color:'#6844fc', points:100, flash:0},
   ];
 
   // Slingshots (single representative edge each, angled walls above flippers)
   const slingshots = [
     {p1:{x:60,y:480}, p2:{x:108,y:545}, points:10, flash:0},
     {p1:{x:300,y:480}, p2:{x:252,y:545}, points:10, flash:0},
+  ];
+
+  // Standup targets (low-bounce, pure score) placed in the open mid-field
+  const targets = [
+    {x:55, y:350, w:14, h:26, color:'#00a800', points:50, flash:0},
+    {x:265, y:350, w:14, h:26, color:'#00a800', points:50, flash:0},
+  ];
+
+  // Rollover lane at the very top — light all 3 for a bonus (classic pinball feature)
+  const rollovers = [
+    {x:70,  y:85, w:26, h:16, lit:false},
+    {x:160, y:78, w:26, h:16, lit:false},
+    {x:250, y:85, w:26, h:16, lit:false},
   ];
 
   // Flippers
@@ -510,6 +538,45 @@
     }
   }
 
+  function resolveTarget(t){
+    const halfW = t.w/2, halfH = t.h/2;
+    const cx = Math.max(t.x-halfW, Math.min(ball.x, t.x+halfW));
+    const cy = Math.max(t.y-halfH, Math.min(ball.y, t.y+halfH));
+    const dx = ball.x-cx, dy = ball.y-cy;
+    const dist = Math.hypot(dx,dy) || 0.0001;
+    if(dist < BALL_R){
+      const nx = dx/dist, ny = dy/dist;
+      ball.x += nx*(BALL_R-dist);
+      ball.y += ny*(BALL_R-dist);
+      const vn = ball.vx*nx + ball.vy*ny;
+      if(vn < 0){
+        ball.vx -= (1+0.5)*vn*nx;
+        ball.vy -= (1+0.5)*vn*ny;
+      }
+      if(t.flash<=0){
+        score += t.points;
+        t.flash = 0.12;
+        sfx.target();
+      }
+    }
+  }
+
+  function checkRollovers(){
+    rollovers.forEach(r=>{
+      if(r.lit) return;
+      if(Math.abs(ball.x-r.x) < r.w/2 && Math.abs(ball.y-r.y) < r.h/2){
+        r.lit = true;
+        score += 30;
+        sfx.rollover();
+        if(rollovers.every(rr=>rr.lit)){
+          score += 500;
+          sfx.jackpot();
+          rollovers.forEach(rr=>rr.lit=false);
+        }
+      }
+    });
+  }
+
   // ---------- Physics step ----------
   function physicsStep(dt){
     // flippers
@@ -539,13 +606,17 @@
     bumpers.forEach(resolveBumper);
     // slingshots
     slingshots.forEach(resolveSlingshot);
+    // standup targets
+    targets.forEach(resolveTarget);
     // flippers
     resolveFlipper(flippers.left);
     resolveFlipper(flippers.right);
+    // rollover lane (sensor only, no collision)
+    checkRollovers();
 
     // speed cap (stability)
     const sp = Math.hypot(ball.vx, ball.vy);
-    const MAXSP = 900;
+    const MAXSP = 1000;
     if(sp > MAXSP){ ball.vx *= MAXSP/sp; ball.vy *= MAXSP/sp; }
 
     // drain check
@@ -568,8 +639,10 @@
     if(state!=='play') return;
     if(ball.moving) return;
     ball.moving = true;
-    ball.vx = -70 - Math.random()*40;
-    ball.vy = -680;
+    // shoots straight up the plunger lane; it clears the lane opening and
+    // deflects off the top-right slope wall into the main field
+    ball.vx = -10 + Math.random()*20;
+    ball.vy = -960;
     sfx.launch();
   }
 
@@ -578,6 +651,7 @@
     document.getElementById('title-overlay').classList.add('hidden');
     document.getElementById('gameover-overlay').classList.add('hidden');
     score = 0; ballsLeft = 3;
+    rollovers.forEach(r=>r.lit=false);
     resetBallToLaunch();
     state = 'play';
     sfx.start();
@@ -617,6 +691,25 @@
     }
   }
 
+  function lighten(hex, amt){
+    const n = parseInt(hex.slice(1),16);
+    let r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+    r=Math.min(255,r+amt); g=Math.min(255,g+amt); b=Math.min(255,b+amt);
+    return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
+  }
+
+  const FIELD_CENTER = {x:165, y:330};
+  function rimOffset(x1,y1,x2,y2, dist){
+    const dx=x2-x1, dy=y2-y1;
+    let nx=-dy, ny=dx;
+    const len = Math.hypot(nx,ny) || 1;
+    nx/=len; ny/=len;
+    const midx=(x1+x2)/2, midy=(y1+y2)/2;
+    const dot = nx*(FIELD_CENTER.x-midx) + ny*(FIELD_CENTER.y-midy);
+    const sign = dot>=0 ? 1 : -1;
+    return { x:nx*sign*dist, y:ny*sign*dist };
+  }
+
   // ---------- Render ----------
   function drawTable(){
     ctx.clearRect(0,0,TW,TH);
@@ -625,12 +718,21 @@
     ctx.fillStyle = '#0a0a1a';
     ctx.fillRect(0,0,TW,TH);
 
-    // playfield polygon fill (rasterized, no smooth diagonal fill)
-    pixPolygonFill([A,B,C,D,E,F,G,H], '#1a1a2e');
+    // playfield + lane fills (rasterized, no smooth diagonal fill)
+    pixPolygonFill([A,B,C,D,DGAP,RMID,F,G,H], '#1a1a2e');
+    pixPolygonFill([D,DGAP,LANE_INNER_BOT,LANE_OUTER_BOT], '#221c38');
 
-    // walls (dot-stepped diagonal lines, not stroke())
+    // walls (dot-stepped diagonal lines, not stroke()) + rim-light for a raised-rail look
     walls.forEach(w=>{
-      pixLine(w[0].x,w[0].y, w[1].x,w[1].y, 4, '#7878f8');
+      pixLine(w[0].x,w[0].y, w[1].x,w[1].y, 4, '#3838b8');
+      const off = rimOffset(w[0].x,w[0].y,w[1].x,w[1].y, 3);
+      pixLine(w[0].x+off.x,w[0].y+off.y, w[1].x+off.x,w[1].y+off.y, 2, '#a0a4ff');
+    });
+
+    // lane direction chevrons (guide the eye: shoot upward)
+    [560,470,380].forEach(cy=>{
+      pixLine(LANE_X-9, cy+6, LANE_X, cy-6, 3, '#00e8d8');
+      pixLine(LANE_X+9, cy+6, LANE_X, cy-6, 3, '#00e8d8');
     });
 
     // drain gap marker (dashed, blocky)
@@ -642,27 +744,53 @@
       }
     }
 
+    // rollover lane pips (top) — lit/unlit indicators
+    rollovers.forEach(r=>{
+      pixRect(r.x-r.w/2-1, r.y-r.h/2-1, r.w+2, r.h+2, '#000000');
+      pixRect(r.x-r.w/2, r.y-r.h/2, r.w, r.h, r.lit ? '#f8b800' : '#302a4a');
+    });
+
+    // standup targets
+    targets.forEach(t=>{
+      const c = t.flash>0 ? '#fcfcfc' : t.color;
+      pixRect(t.x-t.w/2+2, t.y-t.h/2+3, t.w, t.h, '#000000'); // drop shadow
+      pixRect(t.x-t.w/2, t.y-t.h/2, t.w, t.h, '#000000');
+      pixRect(t.x-t.w/2+2, t.y-t.h/2+2, t.w-4, t.h-4, c);
+      pixLine(t.x, t.y-t.h/2+4, t.x, t.y+t.h/2-4, 2, '#0a0a1a');
+    });
+
     // slingshots
     slingshots.forEach(s=>{
       pixLine(s.p1.x,s.p1.y, s.p2.x,s.p2.y, 5, s.flash>0 ? '#fcfcfc' : '#f87858');
     });
 
-    // bumpers (silhouette + fill, no arc())
+    // bumpers (silhouette + fill + dome highlight, no arc())
     bumpers.forEach(bp=>{
-      pixCircle(bp.x, bp.y, bp.r+2, '#000000');
-      pixCircle(bp.x, bp.y, bp.r, bp.flash>0 ? '#fcfcfc' : bp.color);
+      pixCircle(bp.x+3, bp.y+4, bp.r, '#000000'); // drop shadow
+      pixCircle(bp.x, bp.y, bp.r+2, '#000000');   // outline
+      const base = bp.flash>0 ? '#fcfcfc' : bp.color;
+      pixCircle(bp.x, bp.y, bp.r, base);
+      if(bp.flash<=0){
+        pixCircle(bp.x-bp.r*0.35, bp.y-bp.r*0.4, bp.r*0.4, lighten(bp.color,90));
+      }
     });
 
-    // flippers (dot-stepped thick line, square tip — no round cap)
+    // flippers (dot-stepped thick line, square tip — no round cap) + highlight stripe
     [flippers.left, flippers.right].forEach(f=>{
       const tip = flipperTip(f);
+      pixLine(f.pivot.x+3, f.pivot.y+4, tip.x+3, tip.y+4, f.radius*2, '#000000'); // drop shadow
       pixLine(f.pivot.x, f.pivot.y, tip.x, tip.y, f.radius*2, '#f8b800');
+      const nx = -Math.sin(f.angle), ny = Math.cos(f.angle);
+      const hx = nx*f.radius*0.4, hy = ny*f.radius*0.4;
+      pixLine(f.pivot.x+hx, f.pivot.y+hy, tip.x+hx, tip.y+hy, f.radius*0.6, '#ffe066');
     });
 
     // ball
     if(state==='play'){
+      pixCircle(ball.x+2, ball.y+3, BALL_R, '#000000'); // drop shadow
       pixCircle(ball.x, ball.y, BALL_R+1, '#000000');
       pixCircle(ball.x, ball.y, BALL_R-1, '#fcfcfc');
+      pixCircle(ball.x-2, ball.y-2, BALL_R*0.35, '#ffffff');
     }
 
     // HUD
@@ -685,6 +813,7 @@
   function decayFlash(dt){
     bumpers.forEach(b=>{ if(b.flash>0) b.flash -= dt; });
     slingshots.forEach(s=>{ if(s.flash>0) s.flash -= dt; });
+    targets.forEach(t=>{ if(t.flash>0) t.flash -= dt; });
   }
 
   // ---------- Main loop ----------
